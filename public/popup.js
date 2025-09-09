@@ -1,4 +1,13 @@
 // --- SIGNUP → SEND OTPS
+function showPopup(message) {
+  const popup = document.getElementById("popupMsg");
+  popup.textContent = message;
+  popup.style.display = "block";
+  // setTimeout(() => {
+  // popup.style.display = "none";
+  // }, 4);
+}
+
 document
   .getElementById("registerForm")
   ?.addEventListener("submit", async (e) => {
@@ -14,12 +23,21 @@ document
 
     const out = await res.json();
     alert(out.message);
-
+    console.log("otpMessage==== ", out?.mobileOtpKey);
+    if (out?.mobileOtpKey) {
+      showPopup(out?.mobileOtpKey);
+    }
     if (res.ok) {
       // Keep these identifiers in memory for verify/finalize steps
       localStorage.setItem("pendingEmail", data.email);
       localStorage.setItem("pendingMobile", data.mobile);
+      ocument.getElementById("registerForm").style.display = "none";
       document.getElementById("otpSection").style.display = "block";
+    } else {
+      //  window.location.href = "index.html";
+      otpBtn.disabled = false;
+      otpBtn.style.opacity = "1";
+      otpBtn.style.cursor = "pointer";
     }
   });
 
@@ -38,7 +56,13 @@ document
     const out = await res.json();
     alert(out.message);
 
-    emailInput.value = "";
+    // emailInput.value = "";
+    console.log("out============== ", out);
+    if (out?.isLogin) {
+      localStorage.setItem("user", JSON.stringify(out.user));
+
+      window.location.href = "live.html";
+    }
   });
 
 // --- VERIFY MOBILE OTP
@@ -56,6 +80,13 @@ document
     });
     const out = await res.json();
     alert(out.message);
+    // popup.style.display = "none";
+
+    if (out?.isLogin) {
+      localStorage.setItem("user", JSON.stringify(out.user));
+
+      window.location.href = "live.html";
+    }
   });
 
 // --- FINALIZE REGISTRATION

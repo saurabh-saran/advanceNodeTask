@@ -8,7 +8,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import Redis from "ioredis";
 import nodemailer from "nodemailer";
-import twilio from "twilio";
 
 import { v4 as uuidv4 } from "uuid";
 
@@ -55,11 +54,6 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
-
 // helpers
 const OTP_TTL_SEC = 5 * 60; // 5 min
 const SIGNUP_TTL_SEC = 30 * 60; // 30 min
@@ -69,20 +63,20 @@ const signupKey = (email) => `signup:${email}`;
 const emailOtpKey = (email) => `otp:email:${email}`;
 const mobileOtpKey = (mobile) => `otp:mobile:${mobile}`;
 
-function sendOTP(mobileNumber, otp) {
-  client.messages
-    .create({
-      body: `Your OTP is ${otp}`,
-      from: process.env.TWILIO_PHONE_NUMBER, // yaha env ka use karo
-      to: "+91" + mobileNumber, // space hata do
-    })
-    .then((message) => {
-      console.log(`OTP sent! SID: ${message.sid}`);
-    })
-    .catch((err) => {
-      console.error("Error sending OTP:", err);
-    });
-}
+// function sendOTP(mobileNumber, otp) {
+//   client.messages
+//     .create({
+//       body: `Your OTP is ${otp}`,
+//       from: process.env.TWILIO_PHONE_NUMBER, // yaha env ka use karo
+//       to: "+91" + mobileNumber, // space hata do
+//     })
+//     .then((message) => {
+//       console.log(`OTP sent! SID: ${message.sid}`);
+//     })
+//     .catch((err) => {
+//       console.error("Error sending OTP:", err);
+//     });
+// }
 
 // ---------- ROUTES
 
@@ -125,11 +119,11 @@ app.post("/signup", async (req, res) => {
 
     await redis.setex(emailOtpKey(body.email), OTP_TTL_SEC, eOTP);
     await redis.setex(mobileOtpKey(body.mobile), OTP_TTL_SEC, mOTP);
-    sendOTP(body.mobile, mOTP);
-    console.log("body.email======== ", body.email);
+    // sendOTP(body.mobile, mOTP);
+    // console.log("body.email======== ", body.email);
     // send email OTP
     try {
-      const check = await transporter.sendMail({
+      transporter.sendMail({
         from: '"saurabh&company"<saurabh@gmail.com>',
         to: body.email,
         subject: "Your Email OTP",
@@ -139,7 +133,6 @@ app.post("/signup", async (req, res) => {
           eOTP +
           ` . It will expire in 5 minutes.</b>`,
       });
-      console.log("mail send check === ", check);
     } catch (err) {
       console.warn("⚠️ Email send failed (dev mode continue):", err.message);
     }
@@ -147,7 +140,14 @@ app.post("/signup", async (req, res) => {
     // send mobile OTP => integrate Twilio here; for now console
     // console.log(`📱 Mobile OTP for ${body.mobile} => ${mOTP}`);
 
-    res.json({ message: "OTP sent to email & mobile. Please verify." });
+    res.json({
+      status: true,
+      message: "OTP sent to email & mobile. Please verify.",
+      mobileOtpKey:
+        "OTP sent (email to inbox, mobile shown here) (Mobile OTP: " +
+        mOTP +
+        ")",
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -158,27 +158,48 @@ app.post("/signup", async (req, res) => {
 app.post("/verify/email", async (req, res) => {
   try {
     const { email, otp } = req.body;
+    console.log(req.body);
     const saved = await redis.get(signupKey(email));
+    console.log(saved);
     if (!saved)
-      return res
-        .status(400)
-        .json({ message: "Signup session expired. Please sign up again." });
+      return res.status(400).json({
+        message: "Signup session expired. Please sign up again.",
+        isLogin: false,
+      });
 
     const real = await redis.get(emailOtpKey(email));
-    if (!real) return res.status(400).json({ message: "Email OTP expired" });
+    console.log("real========== ", real);
+    if (!real)
+      return res
+        .status(400)
+        .json({ message: "Email OTP expired", isLogin: false });
     if (otp !== real)
-      return res.status(400).json({ message: "Invalid Email OTP" });
+      return res
+        .status(400)
+        .json({ message: "Invalid Email OTP", isLogin: false });
 
     const obj = JSON.parse(saved);
     obj.emailVerified = true;
 
+    if (obj.mobileVerified == true && obj.emailVerified == true) {
+      // await User.create(obj);
+      const newUser = new User(obj);
+      const savedUser = await newUser.save();
+      // cleanup redis
+      await redis.del(signupKey(email));
+      res.json({
+        message: "Email verified ✅",
+        isLogin: true,
+        user: savedUser,
+      });
+      return;
+    }
     await redis
       .multi()
       .setex(signupKey(email), SIGNUP_TTL_SEC, JSON.stringify(obj))
       .del(emailOtpKey(email))
       .exec();
-
-    res.json({ message: "Email verified ✅" });
+    res.json({ message: "Email verified ✅", isLogin: false });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Server error" });
@@ -192,25 +213,41 @@ app.post("/verify/mobile", async (req, res) => {
     // we receive email to update the same signup stub
     const saved = await redis.get(signupKey(email));
     if (!saved)
-      return res
-        .status(400)
-        .json({ message: "Signup session expired. Please sign up again." });
+      return res.status(400).json({
+        message: "Signup session expired. Please sign up again.",
+        isLogin: false,
+      });
 
     const real = await redis.get(mobileOtpKey(mobile));
     if (!real) return res.status(400).json({ message: "Mobile OTP expired" });
     if (otp !== real)
-      return res.status(400).json({ message: "Invalid Mobile OTP" });
+      return res
+        .status(400)
+        .json({ message: "Invalid Mobile OTP", isLogin: false });
 
     const obj = JSON.parse(saved);
     obj.mobileVerified = true;
 
+    if (obj.mobileVerified == true && obj.emailVerified == true) {
+      // await User.create(obj);
+      const newUser = new User(obj);
+      const savedUser = await newUser.save();
+      // cleanup redis
+      await redis.del(signupKey(email));
+      res.json({
+        message: "Mobile verified ✅",
+        isLogin: true,
+        user: savedUser,
+      });
+      return;
+    }
     await redis
       .multi()
       .setex(signupKey(email), SIGNUP_TTL_SEC, JSON.stringify(obj))
-      .del(mobileOtpKey(mobile))
+      .del(emailOtpKey(email))
       .exec();
-
-    res.json({ message: "Mobile verified ✅" });
+    // cleanup redis
+    res.json({ message: "Mobile verified ✅", isLogin: false });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Server error" });
@@ -278,6 +315,7 @@ app.post("/login", async (req, res) => {
 // 6) Get one user
 app.get("/user/:email", async (req, res) => {
   try {
+    console.log({ email: req.params.email });
     const user = await User.findOne({ email: req.params.email }).select(
       "-password"
     );
