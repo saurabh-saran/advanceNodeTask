@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Live Users</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const loggedInUser = JSON.parse(localStorage.getItem("user"));
+
+    if (loggedInUser) {
+      socket.emit("joinRoom", {
+        firstName: loggedInUser.firstName,
+        lastName: loggedInUser.lastName,
+        email: loggedInUser.email
+      });
+    } else {
+      alert("Please login first");
+      window.location.href = "index.html";
+    }
+
+    socket.on("updateUsers", (users) => {
+      const list = document.getElementById("userList");
+      list.innerHTML = "";
+      users.forEach(u => {
+        const li = document.createElement("li");
+        li.textContent = `${u.email} (${u.socketId})`;
+        li.onclick = async () => {
+          const res = await fetch(`/user/${u.email}`);
+          const data = await res.json();
+          const fullAddress = `${data.street || ""}, ${data.city || ""}, ${data.state || ""}, ${data.country || ""}`;
+          alert(`ID: ${data._id}
+Name: ${data.firstName} ${data.lastName}
+Email: ${data.email}
+Mobile: ${data.mobile}
+Login ID: ${data.loginId}
+Address: ${fullAddress}
+Created: ${new Date(data.createdAt).toLocaleString()}
+Updated: ${new Date(data.updatedAt).toLocaleString()}
+SocketID: ${u.socketId}`);
+        };
+        list.appendChild(li);
+      });
+    });
+  </script>
+</head>
+<body>
+  <h2>Live Users</h2>
+  <ul id="userList"></ul>
+</body>
+</html>
